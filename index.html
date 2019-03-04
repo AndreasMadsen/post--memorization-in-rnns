@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <script src="https://distill.pub/template.v2.js"></script>
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.9.0/katex.min.js" integrity="sha384-jmxIlussZWB7qCuB+PgKG1uLjjxbVVIayPJwi6cG6Zb4YKq0JIw+OMnkkEC7kYCq" crossorigin="anonymous"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.9.0/katex.min.css" integrity="sha384-TEMocfGvRuD1rIAacqrknm5BQZ7W7uWitoih+jMNFXQIbNl16bO8OZmylH/Vi/Ei" crossorigin="anonymous">
+
+    <script defer src="bundle.js"></script>
+    <link href="style.css" rel="stylesheet">
+</head>
+
+<body>
+
+<d-front-matter>
+  <script type="text/json">{
+  "title": "Visualizing memorization in RNNs",
+  "description": "Visualizing gradient magnitudes in context can be a powerful tool to see when recurrent units use short-term or long-term contextual understanding.",
+  "authors": [
+    {
+      "author": "Andreas Madsen",
+      "authorURL": "https://github.com/AndreasMadsen",
+      "affiliation": "nearForm Ltd",
+      "affiliationURL": "https://nearform.com"
+    }
+  ]
+  }</script>
+</d-front-matter>
+
+<d-title>
+    <h1>Visualizing memorization in RNNs</h1>
+    <p>
+      Inspecting gradient magnitudes in context can be a powerful tool to
+      see when recurrent units use short-term or long-term contextual
+      understanding.
+    </p>
+    <figure class="l-body" id="ar-hero">
+      <div id="ar-hero-diagram-nlstm" class="ar-hero"></div>
+      <div id="ar-hero-diagram-lstm" class="ar-hero"></div>
+      <div id="ar-hero-diagram-gru" class="ar-hero"></div>
+      <figcaption>This <strong>connectivity visualization</strong> shows
+      how strongly previous input characters influence the current target character
+      in an <a href="#ar-section-autocomplete">autocomplete problem</a>.
+      For example, in the prediction of "grammar" the GRU RNN
+      <a href="javascript:heroSetIndex(28);">initially</a> uses long-term
+      memorization but as <a href="javascript:heroSetIndex(34);">more characters
+      become available</a> the RNN switches to short-term memorization.
+      (<a href="javascript:heroReset();">reset</a>)
+      </figcaption>
+    </figure>
+</d-title>
+
+<d-byline></d-byline>
+
+<d-article>
+  <p>
+    Memorization in Recurrent Neural Networks (RNNs) continues to pose a challenge
+    in many applications. We'd like RNNs to be able to store information over many
+    timesteps and retrieve it when it becomes relevant — but vanilla RNNs often struggle to do this.
+  </p>
+  <p>
+    Several network architectures have been proposed to tackle aspects of this problem, such
+    as Long-Short-Term Memory (LSTM)<d-cite key="hochreiter1997lstm"></d-cite>
+    units and Gated Recurrent Units (GRU)<d-cite key="cho2014gru"></d-cite>.
+    However, the practical problem of memorization still poses a challenge.
+    As such, developing new recurrent units that are better at memorization
+    continues to an active field of research.
+  </p>
+  <p>
+    To compare a recurrent unit against its alternatives, both past and recent
+    papers, such as the Nested LSTM paper by Monzi et al.
+    <d-cite key="moniz2018nlstm"></d-cite>, heavily rely on quantitative
+    comparisons. These comparisons often measure accuracy or
+    cross entropy loss on standard problems such as Penn Treebank<d-cite key="penntreebank"></d-cite>, Chinese
+    Poetry Generation, or text8<d-cite key="text8"></d-cite>, where the task is to predict the
+    next character given existing input.
+  </p>
+  <p>
+    While quantitative comparisons are useful, they only provide partial
+    insight into the how a recurrent unit memorizes. A model can, for example,
+    achieve high accuracy and cross entropy loss by just providing highly accurate
+    predictions in cases that only require short-term memorization, while
+    being inaccurate at predictions that require long-term
+    memorization.
+    For example, when autocompleting words in a sentence, a model with only short-term understanding could still exhibit high accuracy completing the ends of words once most of the characters are present.
+    However, without longer term contextual understanding it won't be able to predict words when only a few characters are known.
+  </p>
+  <p>
+    This article presents a qualitative visualization method for comparing
+    recurrent units with regards to memorization and contextual understanding.
+    The method is applied to the three recurrent units mentioned above: Nested LSTMs, LSTMs, and GRUs.
+  </p>
+
+  <h2 id="recurrent-units">Recurrent Units</h2>
+  <p>
+    The networks that will be analyzed all use a simple RNN structure:
+  </p>
+  <figure class="ar-math-figure">
+    <div class="ar-math-grid" style="grid-template-rows: repeat(auto, 3);">
+      <math-latex display-mode latex="h_{\ell}^{t}"></math-latex>
+      <span class="ar-math-annotation">
+         Output for layer <math-latex latex="\ell"></math-latex> at time <math-latex latex="t"></math-latex>.
+      </span>
+
+      <math-latex display-mode latex="="></math-latex>
+      <math-latex display-mode latex="\mathrm{Unit}"></math-latex>
+      <span class="ar-math-annotation">
+         Recurrent unit of choice.
+      </span>
+
+      <math-latex display-mode latex="(h_{\ell-1}^{t}, h_{\ell}^{t-1}), \text{ where: } h_{0}^t = x_t"></math-latex>
+
+      <math-latex display-mode style="grid-row: 3; grid-column: 1;" latex="y^t"></math-latex>
+      <math-latex display-mode style="grid-row: 3; grid-column: 2;" latex="="></math-latex>
+      <math-latex display-mode style="grid-row: 3; grid-column: 3;" latex="\mathrm{Softmax}"></math-latex>
+      <math-latex display-mode style="grid-row: 3; grid-column: 4;" latex="(h_L^t)"></math-latex>
+    </div>
+  </figure>
+  <p>
+    In theory, the time dependency allows it in each iteration to know
+    about every part of the sequence that came before. However, this time
+    dependency typically causes a vanishing gradient problem that results in
+    long-term dependencies being ignored during training
+    <d-cite key="pascanu2013vanishing"></d-cite>.
+  </p>
+  <figure id="ar-memorization-problem-rnn">
+    <figcaption>
+      <strong>Vanishing Gradient: </strong> where the contribution from the
+      earlier steps becomes insignificant in the gradient for the vanilla RNN
+      unit.
+    </figcaption>
+  </figure>
+  <p>
+    Several solutions to the vanishing gradient problem have been proposed over
+    the years. The most popular are the aforementioned LSTM and GRU units, but this
+    is still an area of active research. Both LSTM and GRU are well known
+    and <a href="http://colah.github.io/posts/2015-08-Understanding-LSTMs/">
+    thoroughly explained in literature</a>. Recently, Nested LSTMs have also been proposed
+    <d-cite key="moniz2018nlstm"></d-cite>--an explanation of Nested LSTMs
+    can be found <a href="#appendix-nestedlstm">in the appendix</a>.
+  </p>
+  <figure id="ar-recurrent-units" data-show="nlstm">
+    <img class="ar-recurrent-unit-nlstm" src="graphics/nlstm-web.svg" alt="Nested LSTM Diagram">
+    <figcaption class="ar-recurrent-unit-nlstm">
+      <strong>Recurrent Unit, Nested LSTM:</strong> makes the cell update depend on another
+      LSTM unit, supposedly this allows more long-term memory compared to
+      stacking LSTM layers.
+    </figcaption>
+    <img class="ar-recurrent-unit-lstm" src="graphics/lstm-web.svg" alt="Long Short Term Memory Diagram">
+    <figcaption class="ar-recurrent-unit-lstm">
+      <strong>Recurrent Unit, LSTM:</strong> allows for long-term
+      memorization by gateing its update, thereby solving the vanishing gradient
+      problem.
+    </figcaption>
+    <img class="ar-recurrent-unit-gru" src="graphics/gru-web.svg" alt="Gated Recurrent Unit Diagram">
+    <figcaption class="ar-recurrent-unit-gru">
+      <strong>Recurrent Unit, GRU:</strong> solves the vanishing gradient
+        problem without depending on an internal memory state.
+    </figcaption>
+  </figure>
+  <p>
+    It is not entirely clear why one recurrent unit performs better than another
+    in some applications, while in other applications it is another type of
+    recurrent unit that performs better. Theoretically they all solve the vanishing
+    gradient problem, but in practice their performance is highly application
+    dependent.
+  </p>
+  <p>
+    Understanding why these differences occur is likely an opaque and
+    challenging problem. The purpose of this article is to demonstrate a
+    visualization technique that can better highlight what these differences
+    are. Hopefully, such an understanding can lead to a deeper understanding.
+  </p>
+
+  <h2 id="comparing-recurrent-units">Comparing Recurrent Units</h2>
+  <p>
+    Comparing different Recurrent Units is often more involved than simply comparing the accuracy or cross entropy
+    loss. Differences in these high-level quantitative measures
+    can have many explanations and may only be because of some small improvement
+    in predictions that only requires short-term contextual understanding,
+    while it is often the long-term contextual understanding that is of interest.
+  </p>
+  <h3 id="a-problem-for-qualitative-analysis">A problem for qualitative analysis</h3>
+  <p>
+    Therefore a good problem for qualitatively analyzing contextual
+    understanding should have a human-interpretable output and depend both on
+    long-term and short-term contextual understanding. The typical problems
+    that are often used, such as Penn Treebank<d-cite key="penntreebank"></d-cite>, Chinese Poetry Generation, or
+    <d-cite key="text8"></d-cite> generation do not have outputs that are easy to reason about, as they
+    require an extensive understanding of either grammar, Chinese poetry, or
+    only output a single letter.
+  </p>
+  <p id="ar-section-autocomplete">
+    To this end, this article studies the autocomplete problem. Each character is mapped
+    to a target that represents the entire word. The space leading up to the word should also map to that target.
+    This prediction based on the space character is in particular useful for showing contextual understanding.
+  </p>
+  <p>
+    The autocomplete problem is quite similar to the text8 generation
+    problem: the only difference is that instead of predicting the next letter,
+    the model predicts an entire word. This makes the output much more
+    interpretable. Finally, because of its close relation to text8 generation,
+    existing literature on text8 generation is relevant and comparable,
+    in the sense that models that work well on text8 generation should work
+    well on the autocomplete problem.
+  </p>
+  <figure id="ar-demo">
+    <figcaption id="ar-demo-input-caption">User types input sequence.</figcaption>
+    <figcaption id="ar-demo-rnn-caption">Recurrent neural network processes the sequence.</figcaption>
+    <figcaption id="ar-demo-output-caption">The output for the last character is used.</figcaption>
+    <figcaption id="ar-demo-final-caption">The most likely suggestions are extracted.</figcaption>
+
+    <div id="ar-demo-content">
+      <div id="ar-demo-input-content"></div>
+      <div id="ar-demo-rnn-content"></div>
+      <div id="ar-demo-output-content"></div>
+      <div id="ar-demo-final-content"></div>
+    </div>
+
+    <figcaption id="ar-demo-caption">
+      <p>
+        <strong>Autocomplete:</strong> An application that has a humanly
+        interpretable output, while depending on both short and long-term
+        contextual understanding. In this case, the network uses past information
+        and understands the next word should be a country.
+      </p>
+      <p>
+        The output in this figure was produced by the GRU model;
+        all model setups are <a href="#appendix-autocomplete">described in the appendix</a>.
+
+        <span style="font-style: italic">
+            Try <a href="javascript:arDemoShort();">removing the last letters</a> to see
+            that the network continues to give meaningful suggestions.
+        </span>
+        <span style="font-style: italic" id="ar-demo-input-notice"></span>
+        (<a href="javascript:arDemoReset();">reset</a>).
+      </p>
+    </figcaption>
+  </figure>
+  <p>
+    The autocomplete dataset is constructed from the full
+    <a href="http://mattmahoney.net/dc/textdata.html">text8</a> dataset. The
+    recurrent neural networks used to solve the problem have two layers, each
+    with 600 units. There are three models, using GRU, LSTM, and Nested LSTM.
+    See <a href="#appendix-autocomplete">the appendix</a> for more details.
+  </p>
+  <h3 id="comparing-recurrent-units">Connectivity in the Autocomplete Problem</h3>
+  <p>
+    In the recently published Nested LSTM paper
+    <d-cite key="moniz2018nlstm"></d-cite>, they qualitatively compared their
+    Nested LSTM unit to other recurrent units, to show how it memorizes in
+    comparison, by visualizing individual cell activations.
+  </p>
+  <p>
+    This visualization was inspired by Karpathy et al.
+    <d-cite key="karpathy2015rnnvis"></d-cite> where they identify cells
+    that captures a specific feature. For identifying a specific
+    feature, this visualization approach works well. However, it is not a useful
+    argument for memorization in general as the output is entirely dependent
+    on what feature the specific cell captures.
+  </p>
+  <p>
+    Instead, to get a better idea of how well each model memorizes and uses
+    memory for contextual understanding, the connectivity between the desired
+    output and the input is analyzed. This is calculated as:
+  </p>
+  <figure class="ar-math-figure">
+    <div class="ar-math-grid">
+      <math-latex display-mode latex="\textrm{connectivity}("></math-latex>
+      <math-latex style="justify-self: center;" display-mode latex="t"></math-latex>
+      <span class="ar-math-annotation">
+         Input time index.
+      </span>
+
+      <math-latex display-mode latex=","></math-latex>
+      <math-latex style="justify-self: center;" display-mode latex="\tilde{t}"></math-latex>
+      <span class="ar-math-annotation">
+         Output time index.
+      </span>
+
+      <math-latex display-mode latex=") ="></math-latex>
+      <math-latex display-mode latex="\left|\left|\frac{\partial (h_L^{\tilde{t}})_k}{\partial x^t}\right|\right|_2"></math-latex>
+      <span class="ar-math-annotation" style="max-width: 130px">
+         Magnitude of the gradient, between the logits for the desired output <math-latex latex="(h_L^{\tilde{t}})_k"></math-latex> and the input
+        <math-latex latex="x^t"></math-latex>.
+      </span>
+    </div>
+  </figure>
+  <p>
+    Exploring the connectivity gives a surprising amount of insight into the
+    different models' ability for long-term contextual understanding. Try and
+    interact with the figure below yourself to see what information the
+    different models use for their predictions.
+  </p>
+  <figure>
+    <div id="ar-connectivity-nlstm" class="ar-connectivity"></div>
+    <div id="ar-connectivity-lstm" class="ar-connectivity"></div>
+    <div id="ar-connectivity-gru" class="ar-connectivity"></div>
+    <figcaption>
+      <strong>Connectivity:</strong> the connection strength between
+      the target for the selected character and the input characters is highlighted in green
+      (<a href="javascript:connectivitySetIndex(null);">reset</a>).
+      <em>Hover over or tap the text to change the selected character.</em>
+    </figcaption>
+  </figure>
+  <p>
+    Let's highlight three specific situations:
+  </p>
+  <figure>
+    <div id="ar-walkthrough">
+      <div class="ar-walkthrough-step">
+        <div class="ar-walkthrough-number">1</div>
+        <div class="ar-walkthrough-text">
+          <p>
+          Observe how the models predict the word "learning" with <a href="javascript:connectivitySetIndex(106);">only the first two
+          characters as input</a>. The Nested LSTM model barely uses past
+          information and thus only suggests common words starting with the letter "l".
+          </p>
+          <p>
+          In contrast, the LSTM and GRU models both suggests the word "learning".
+          The GRU model shows stronger connectivity with the word "advanced",
+          and we see in the suggestions that it predicts a higher probability for "learning" than the LSTM model.
+          </p>
+        </div>
+      </div>
+      <div class="ar-walkthrough-step">
+        <div class="ar-walkthrough-number">2</div>
+        <div class="ar-walkthrough-text">
+          <p>
+          Examine how the models predict the word "grammar".
+          This word appears twice; when it appears for the first time the models have very little context.
+          Thus, no model suggests "grammar" until it has
+          <a href="javascript:connectivitySetIndex(32);">seen at least 4 characters</a>.
+          </p>
+          <p>
+          When "grammar" appears for the second time, the models have more context.
+          The GRU model is able to predict the word "grammar" with only <a href="javascript:connectivitySetIndex(159);">
+          1 character from the word itself</a>. The LSTM and Nested LSTM again
+          need <a href="javascript:connectivitySetIndex(162);">at least 4 characters</a>.
+          </p>
+        </div>
+      </div>
+      <div class="ar-walkthrough-step">
+        <div class="ar-walkthrough-number">3</div>
+        <div class="ar-walkthrough-text">
+          <p>
+            Finally, let's look at predicting the word "schools"
+            <a href="javascript:connectivitySetIndex(141);">
+            given only the first character</a>. As in the other cases,
+            the GRU model seems better at using past information for
+            contextual understanding.
+          </p>
+          <p>
+            What makes this case noteworthy is how the LSTM model appears to
+            use words from almost the entire sentence as context. However,
+            its suggestions are far from correct and have little to do
+            with the previous words it seems to use in its prediction.
+            This suggests that the LSTM model in this setup is capable of
+            long-term memorization, but not long-term contextual understanding.
+          </p>
+        </div>
+      </div>
+      <div class="ar-walkthrough-pages">
+        <span class="ar-walkthrough-page" data-connectivity-index="106">1</span>
+        <span class="ar-walkthrough-page" data-connectivity-index="159">2</span>
+        <span class="ar-walkthrough-page" data-connectivity-index="141">3</span>
+      </div>
+    </div>
+    <figcaption>
+      <em>The colored number links above change the connectivity figure's displayed timestep and explanation.</em>
+    </figcaption>
+  </figure>
+  <p>
+    These observations show that the connectivity visualization is a powerful tool
+    for comparing models in terms of which previous inputs they use for contextual understanding.
+    However, it is only possible to compare models on the same dataset, and
+    on a specific example. As such, while these observations may show that
+    Nested LSTM is not very capable of long-term contextual understanding in this example;
+    these observations may not generalize to other datasets or hyperparameters.
+  </p>
+  <h3 id="future-work">Future work; quantitative metric</h3>
+  <p>
+    From the above observations it appears that short-term contextual understanding
+    often involves the word that is being predicted itself. That is, the models switch to
+    using previously seen letters from the word itself, as more letters become
+    available. In contrast, at the beginning of predicting a word, models--especially the
+    GRU network--use previously seen words as context for the prediction.
+  </p>
+  <p>
+    This observation suggests a quantitative metric: measure the accuracy given
+    how many letters from the word being predicted are already known.
+    It is not clear that this is best quantitative metric: it is highly problem dependent,
+    and it also doesn't summarize the model to a single number, which one may wish for a more direct comparison.
+   </p>
+   <figure>
+     <div id="ar-accuracy-graph"></div>
+     <figcaption>
+       <strong>Accuracy Graph</strong>: shows the accuracy
+       given a fixed number of characters in a word that the RNN has seen.
+       0 characters mean that the RNN has only seen the space leading up
+       to the word, including all the previous text which should provide context.
+       The different line styles, indicates if the correct word should appear
+       among the top 1, 2, or 3 suggestions.
+      </figcaption>
+   </figure>
+   <p>
+     These results suggest that the GRU model is better at long-term contextual
+     understanding, while the LSTM model is better at short-term contextual
+     understanding. These observations are valuable, as it justifies why the
+     <a href="#ar-overall-accuracy">overall accuracy of the GRU and LSTM models
+     </a> are almost identical, while the connectivity visualization shows that
+     the GRU model is far better at long-term contextual understanding.
+   </p>
+   <p>
+     While more detailed qualitative metrics like this provides new insight,
+     qualitative analysis like the connectivity figure presented
+     in this article still has great value. As the connectivity visualization gives an
+     intuitive understanding of how the model works, which a quantitative metric
+     cannot. It also shows that a wrong prediction can still be considered a
+     useful prediction, such as a synonym or a contextually reasonable
+     prediction.
+   </p>
+
+  <h2 id="conclusion">Conclusion</h2>
+  <p>
+    Looking at overall accuracy and cross entropy loss in itself is not that
+    interesting. Different models may prioritize either long-term or
+    short-term contextual understanding, while both models can have similar
+    accuracy and cross entropy.
+  </p>
+  <p>
+    A qualitative analysis, where one looks at how previous input is used in
+    the prediction is therefore also important when judging models. In this
+    case, the connectivity visualization together with the autocomplete
+    predictions, reveals that the GRU model is much more capable of long-term
+    contextual understanding, compared to LSTM and Nested LSTM. In the case of
+    LSTM, the difference is much higher than one would guess from just looking
+    at the overall accuracy and cross entropy loss alone. This observation is
+    not that interesting in itself as it is likely very dependent on the
+    hyperparameters, and the specific application.
+  </p>
+  <p>
+    Much more valuable is that this visualization method makes it possible
+    to intuitively understand how the models are different, to a much higher
+    degree than just looking at accuracy and cross entropy. For this application,
+    it is clear that the GRU model uses repeating words and semantic meaning
+    of past words to make its prediction, to a much higher degree than the LSTM
+    and Nested LSTM models. This is both a valuable insight when choosing the
+    final model, but also essential knowledge when developing better models
+    in the future.
+  </p>
+</d-article>
+
+<d-appendix>
+  <h3 id="acknowledgments">Acknowledgments</h3>
+  <p>
+    Many thanks to the authors of the original Nested LSTM paper
+    <d-cite key="moniz2018nlstm"></d-cite>, Joel Ruben, Antony Moniz,
+    and David Krueger. Even though the findings here were not the same, the
+    paper have inspired much of this article, as it shows that something as
+    familiar as the recurrent unit is still an open research area.
+  </p>
+  <p>
+    I am also grateful for the excellent feedback and patience from the Distill
+    team, especially Christopher Olah and Ludwig Schubert, as well as the
+    feedback from the peer-reviewers. Their feedback has dramatically improved
+    the quality of this article.
+  </p>
+
+  <h3 id="appendix-nestedlstm">Nested LSTM</h3>
+  <p>
+    The Nested LSTM unit attempt to solve the long-term memorization from a
+    more practical point of view. Where the standard LSTM unit solves the
+    vanishing gradient problem by adding internal memory, and the GRU attempt
+    to be a faster solution than LSTM by using no internal memory, the Nested
+    LSTM goes in the opposite direction of GRU by adding additional memory to
+    the unit <d-cite key="moniz2018nlstm"></d-cite>.
+    The idea here is that adding additional memory to the unit allows for more
+    long-term memorization.
+  </p>
+  <figure>
+    <img style="width: 100%;" src="graphics/nlstm-web.svg" alt="Nested Long Short Term Memory Diagram">
+    <figcaption>
+      <strong>Nested LSTM:</strong> makes the cell update depend on another
+      LSTM unit, supposedly this allows more long-term memory compared to
+      stacking LSTM layers.
+    </figcaption>
+  </figure>
+  <p>
+    The additional memory is integrated into the LSTM unit by changing how the
+    cell value <math-latex latex="c_\ell^t"></math-latex> is updated. Instead of
+    defining the cell value update as <math-latex latex="
+      c_\ell^t = i_\ell^t \odot z_\ell^t + f_\ell^t \odot c_\ell^{t-1}
+    "></math-latex>, as done in vanilla LSTM, it uses another LSTM unit:
+    <math-latex display-mode latex="
+      c_\ell^t = \mathrm{LSTM}(i_\ell^t \odot z_\ell^t, f_\ell^t \odot c_\ell^{t-1})
+    "></math-latex>
+    <span>See the defintion of <math-latex latex="
+    \mathrm{LSTM}(\cdot, \cdot)"></math-latex> futher down <a href="#appendix-lstm">
+    in the appendix</a>. </span>
+  </p>
+  <p>
+    The complete set of equations then becomes:
+    <math-latex display-mode latex="\begin{aligned}
+      i_\ell^t &= \sigma_i(IW_{\ell-1, \ell} h_{\ell-1}^{t} + IW_{\ell, \ell} h_{\ell}^{t-1}) \\
+      f_\ell^t &= \sigma_f(FW_{\ell-1, \ell} h_{\ell-1}^{t} + FW_{\ell, \ell} h_{\ell}^{t-1}) \\
+      o_\ell^t &= \sigma_o(OW_{\ell-1, \ell} h_{\ell-1}^{t} + OW_{\ell, \ell} h_{\ell}^{t-1}) \\
+      z_\ell^t &= \sigma_z(ZW_{\ell-1, \ell} h_{\ell-1}^{t} + ZW_{\ell, \ell} h_{\ell}^{t-1}) \\
+      c_\ell^t &= \mathrm{LSTM}(i_\ell^t \odot z_\ell^t, f_\ell^t \odot c_\ell^{t-1}) \\
+      h_{\ell}^{t} &= \mathrm{NLSTM}(h_{\ell-1}^{t}, h_{\ell}^{t-1}) \coloneqq o_\ell^t \odot \sigma_h(c_{\ell}^{t})
+    \end{aligned}"></math-latex>
+  </p>
+  <p>
+    Like in vanilla LSTM, the gate activation functions <math-latex latex="
+    \left(\sigma_i(\cdot), \sigma_f(\cdot), \text{ and } \sigma_o(\cdot)\right)
+    "></math-latex> are usually the simoid activation function. However,
+    only the <math-latex latex="\sigma_h(\cdot)"></math-latex> is set to
+    <math-latex latex="\tanh(\cdot)"></math-latex>. While,
+    <math-latex latex="\sigma_z(\cdot)"></math-latex> is just the identity
+    function, otherwise two non-linear activation functions would be applied
+    on the same scalar without any change, except for the multiplication by
+    the input gate. The activation functions for  <math-latex latex="
+    \mathrm{LSTM}(\cdot, \cdot)"></math-latex> remains the same.
+  </p>
+  <p>
+    The abstraction, of how to combine the input with the cell value, allows
+    for a lot of flexibility. Using this abstraction, it is not only possible
+    to add one extra internal memory state but the internal
+    <math-latex latex="\mathrm{LSTM}(\cdot, \cdot)"></math-latex> unit can
+    recursively be replaced by as many internal
+    <math-latex latex="\mathrm{NLSTM}(\cdot, \cdot)"></math-latex> units as
+    one would wish, thereby adding even more internal memory.
+  </p>
+  <h3 id="appendix-lstm">Long Short-Term Memory</h3>
+  <p>
+  The equations defining <math-latex latex="
+  \mathrm{LSTM}(\cdot, \cdot)"></math-latex> as used in <math-latex latex="
+  \mathrm{NLSTM}(\cdot, \cdot)"></math-latex> are:
+  <math-latex display-mode latex="\begin{aligned}
+    \tilde{i}_\ell^t &= \sigma_i(IW_{\ell-1, \ell} \tilde{h}_{\ell-1}^{t} + IW_{\ell, \ell} \tilde{h}_{\ell}^{t-1}) \\
+    \tilde{f}_\ell^t &= \sigma_f(FW_{\ell-1, \ell} \tilde{h}_{\ell-1}^{t} + FW_{\ell, \ell} \tilde{h}_{\ell}^{t-1}) \\
+    \tilde{o}_\ell^t &= \sigma_o(OW_{\ell-1, \ell} \tilde{h}_{\ell-1}^{t} + OW_{\ell, \ell} \tilde{h}_{\ell}^{t-1}) \\
+    \tilde{z}_\ell^t &= \sigma_z(ZW_{\ell-1, \ell} \tilde{h}_{\ell-1}^{t} + ZW_{\ell, \ell} \tilde{h}_{\ell}^{t-1}) \\
+    \tilde{c}_\ell^t &= \tilde{i}_\ell^t \odot \tilde{z}_\ell^t + \tilde{f}_\ell^t \odot \tilde{c}_\ell^{t-1} \\
+    \tilde{h}_{\ell}^{t} &= \mathrm{LSTM}(\tilde{h}_{\ell-1}^{t}, \tilde{h}_{\ell}^{t-1}) \coloneqq \tilde{o}_\ell^t \odot \sigma_h(\tilde{c}_\ell^t)
+  \end{aligned}"></math-latex>
+  In terms of the Nested LSTM unit, <math-latex latex="
+  \tilde{h}_{\ell-1}^{t} = i_\ell^t \odot z_\ell^t"></math-latex> and
+  <math-latex latex="\tilde{h}_{\ell}^{t-1} = f_\ell^t \odot c_\ell^{t-1}"></math-latex>.
+  </p>
+  <p>
+    The gate activation functions <math-latex latex="
+    \left(\sigma_i(\cdot), \sigma_f(\cdot), \text{ and } \sigma_o(\cdot)\right)
+    "></math-latex> are usually the simoid activation function.
+    While <math-latex latex="
+    \left(\sigma_z(\cdot) \text{ and } \sigma_h(\cdot)\right)
+    "></math-latex> are usually <math-latex latex="\tanh(\cdot)"></math-latex>.
+  </p>
+
+  <h3 id="appendix-autocomplete">Autocomplete Problem</h3>
+  <p>
+    The autocomplete dataset is constructed from the full
+    <a href="http://mattmahoney.net/dc/textdata.html">text8</a> dataset, where
+    each observation consists of maximum 200 characters and is ensured not to
+    contain partial words. 90% of the observations are used for training,
+    5% for validation and 5% for testing.
+  </p>
+  <p>
+    The input vocabulary is a-z, space, and a padding symbol. The output
+    vocabulary consists of the <math-latex latex="2^{14} = 16384"></math-latex>
+    most frequent words, and two additional symbols, one for padding and one
+    for unknown words. The network is not penalized for predicting padding
+    and unknown words wrong.
+  </p>
+  <p>
+    The GRU, LSTM each have 2 layers of 600 units. Similarly, the Nested LSTM
+    model has 1 layer of 600 units but with 2 internal memory states.
+    Additionally, each model has an input embedding layer and a final dense
+    layer to match the vocabulary size.
+  </p>
+  <figure class="ar-table-container">
+    <table class="ar-table">
+      <thead>
+        <tr><th>Model</th><th>Units</th><th>Layers</th><th>Depth</th><th colspan="3">Parameters</th></tr>
+        <tr><th></th><th></th><th></th><th></th><th>Embedding</th><th>Recurrent</th><th>Dense</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>GRU</td><td>600</td><td>2</td><td>N/A</td><td>16200</td><td>4323600</td><td>9847986</td>
+        <tr><td>LSTM</td><td>600</td><td>2</td><td>N/A</td><td>16200</td><td>5764800</td><td>9847986</td>
+        <tr><td>Nested LSTM</td><td>600</td><td>1</td><td>2</td><td>16200</td><td>5764800</td><td>9847986</td>
+      </tbody>
+    </table>
+    <figcaption>
+      <strong>Model Configurations:</strong> shows the number of layers, units,
+      and parameters for each model.
+    </figcaption>
+  </figure>
+  <p>
+    There are 456896 sequences in the training dataset, and a mini-batch size
+    of 64 observations is used. A single iteration over the entire dataset
+    then corresponds to 7139 mini-batches. The training runs twice over the
+    dataset, thus corresponding to trained for 14278 mini-batches. For training,
+    Adam optimization is used with default parameters.
+  </p>
+  <figure>
+    <svg id="ar-autocomplete-training" class="ar-line-graph"></svg>
+    <figcaption>
+      <strong>Model training:</strong> shows the training loss and
+      validation loss for the GRU, LSTM, and Nested LSTM models when training
+      on the autocomplete problem. The x-axis is
+      <a href="javascript:setAutocompleteTrainingGraphXAxis('time')">time</a> or
+      <a href="javascript:setAutocompleteTrainingGraphXAxis('mini-batches')">mini-batches</a>.
+    </figcaption>
+  </figure>
+  <p>
+    Evaluating the model on the test-dataset yields the following cross
+    entropy losses and accuracies.
+  </p>
+  <figure class="ar-table-container" id="ar-overall-accuracy">
+    <table class="ar-table">
+      <thead>
+        <tr><th>Model</th><th>Cross Entropy</th><th>Accuracy</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>GRU</td><td>2.1170</td><td>52.01%</td>
+        <tr><td>LSTM</td><td>2.1713</td><td>51.40%</td>
+        <tr><td>Nested LSTM</td><td>2.4950</td><td>47.10%</td>
+      </tbody>
+    </table>
+    <figcaption>
+      <strong>Model testing:</strong> shows the testing loss and accuracy
+      for the GRU, LSTM, and Nested LSTM models on the autocomplete problem.
+    </figcaption>
+  </figure>
+  <p>
+    The implementation is available at
+    <a href="https://github.com/distillpub/post--memorization-in-rnns">
+      https://github.com/distillpub/post--memorization-in-rnns
+    </a>.
+  </p>
+  <d-citation-list></d-citation-list>
+  <d-bibliography src="bibliography.bib"></d-bibliography>
+</d-appendix>
+
+</body>
